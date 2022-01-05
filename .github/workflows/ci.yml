@@ -43,7 +43,15 @@ jobs:
   docker:
     name: Build Docker image
     runs-on: ubuntu-latest
+    env:
+      DOCKER_BUILDKIT: '1'
+      REPO: ghcr.io/${{ github.repository_owner }}/hako-server
     steps:
       - uses: actions/checkout@v2
       - name: Run docker build
-        run: docker build -t hako-server .
+        run: docker build --build-arg BUILDKIT_INLINE_CACHE=1 --cache-from ${REPO}:builder -t hako-server .
+      - name: Cache build stage
+        run: |
+          echo "${{ secrets.CR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker build --build-arg BUILDKIT_INLINE_CACHE=1 -t ${REPO}:builder --target builder .
+          docker push ${REPO}:builder
