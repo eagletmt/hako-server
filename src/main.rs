@@ -6,6 +6,8 @@ use futures_util::TryStreamExt as _;
 enum Opt {
     #[structopt(about = "Upload Hako definitions to S3")]
     UploadDefinitions(UploadDefinitionsOpt),
+    #[structopt(about = "Start gRPC server")]
+    ApiServer(ApiServerOpt),
 }
 
 #[derive(structopt::StructOpt)]
@@ -22,7 +24,15 @@ struct UploadDefinitionsOpt {
     #[structopt(long, env, help = "Target S3 bucket")]
     s3_bucket: String,
     #[structopt(long, env, help = "Target S3 prefix")]
-    s3_prefix: Option<String>,
+    s3_prefix: String,
+}
+
+#[derive(structopt::StructOpt)]
+struct ApiServerOpt {
+    #[structopt(long, env, help = "S3 bucket")]
+    s3_bucket: String,
+    #[structopt(long, env, help = "S3 prefix")]
+    s3_prefix: String,
 }
 
 #[tokio::main]
@@ -32,6 +42,7 @@ async fn main() -> anyhow::Result<()> {
 
     match Opt::from_args() {
         Opt::UploadDefinitions(opt) => upload_definitions(opt).await,
+        Opt::ApiServer(opt) => api_server(opt).await,
     }
 }
 
@@ -55,11 +66,7 @@ async fn upload_definitions(opt: UploadDefinitionsOpt) -> anyhow::Result<()> {
         .is_some()
     {}
 
-    let key = if let Some(ref prefix) = opt.s3_prefix {
-        format!("{}/current", prefix)
-    } else {
-        "current".to_owned()
-    };
+    let key = format!("{}/current", opt.s3_prefix);
     tracing::info!(
         "Upload current ({}) to s3://{}/{}",
         opt.revision,
@@ -85,7 +92,7 @@ async fn upload_definitions(opt: UploadDefinitionsOpt) -> anyhow::Result<()> {
 
 fn is_jsonnet(path: &std::path::Path) -> bool {
     if let Some(ext) = path.extension() {
-        ext == "jsonnet" || ext == "libsonnet"
+        ext == "jsonnet"
     } else {
         false
     }
@@ -96,16 +103,30 @@ async fn upload_file(
     opt: &UploadDefinitionsOpt,
     path: std::path::PathBuf,
 ) -> anyhow::Result<()> {
-    let relative_path = path
-        .strip_prefix(&opt.directory)
-        .context("failed to strip root directory prefix")?;
-    let key = if let Some(ref prefix) = opt.s3_prefix {
-        format!("{}/{}/{}", prefix, opt.revision, relative_path.display())
-    } else {
-        format!("{}/{}", opt.revision, relative_path.display())
-    };
+    let filename = path
+        .file_name()
+        .with_context(|| format!("failed to find filename of {}", path.display()))?
+        .to_str()
+        .with_context(|| format!("failed to convert to string from {}", path.display()))?;
+    let app_id = filename.strip_suffix(".jsonnet").unwrap();
 
-    // TODO: validate Jsonnet content
+    let key = format!("{}/{}/{}.json", opt.s3_prefix, opt.revision, app_id);
+
+    let state = jrsonnet_evaluator::EvaluationState::default();
+    state.with_stdlib();
+    state.set_manifest_format(jrsonnet_evaluator::ManifestFormat::Json(2));
+    state.set_import_resolver(Box::new(jrsonnet_evaluator::FileImportResolver::default()));
+    state.add_ext_var("appId".into(), jrsonnet_evaluator::Val::Str(app_id.into()));
+    let code = tokio::fs::read_to_string(&path)
+        .await
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    let json_str = state
+        .evaluate_snippet_raw(path.clone().into(), code.into())
+        .and_then(|val| state.manifest(val))
+        .map_err(|e| anyhow::Error::msg(state.stringify_err(&e)))
+        .with_context(|| format!("failed to evaluate {}", path.display()))?;
+    let _: hako_server::definition::Definition = serde_json::from_str(&json_str)
+        .with_context(|| format!("failed to deserialize {}\n{}", path.display(), json_str))?;
 
     tracing::info!(
         "Upload {} to s3://{}/{}",
@@ -114,17 +135,11 @@ async fn upload_file(
         key
     );
 
-    let metadata = tokio::fs::metadata(&path)
-        .await
-        .with_context(|| format!("failed to read metadata of {}", path.display()))?;
-    let body = aws_sdk_s3::ByteStream::from_path(&path)
-        .await
-        .with_context(|| format!("failed to read {} into ByteStream", path.display()))?;
+    let body = aws_sdk_s3::ByteStream::from(json_str.as_bytes().to_owned());
     s3_client
         .put_object()
         .bucket(&opt.s3_bucket)
         .key(&key)
-        .content_length(metadata.len() as i64)
         .body(body)
         .send()
         .await
@@ -138,4 +153,20 @@ async fn upload_file(
         })?;
 
     Ok(())
+}
+
+async fn api_server(opt: ApiServerOpt) -> anyhow::Result<()> {
+    let shared_config = aws_config::load_from_env().await;
+    let service = hako_server::api_server::DeploymentService::new(
+        hako_server::api_server::DeploymentServiceConfig {
+            s3_bucket: opt.s3_bucket,
+            s3_prefix: opt.s3_prefix,
+        },
+        &shared_config,
+    );
+    let server = hako_server::api_server::DeploymentServer::new(service);
+    Ok(tonic::transport::Server::builder()
+        .add_service(server)
+        .serve(std::net::SocketAddr::from(([127, 0, 0, 1], 50051)))
+        .await?)
 }

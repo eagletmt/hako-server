@@ -1,0 +1,14 @@
+syntax = "proto3";
+package hako;
+
+service Deployment {
+  rpc DeployOneshot(DeployOneshotRequest) returns (DeployOneshotResponse) {}
+}
+
+message DeployOneshotRequest {
+  string app_id = 1;
+}
+
+message DeployOneshotResponse {
+  string task_definition_arn = 1;
+}
