@@ -38,6 +38,10 @@ struct ApiServerOpt {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     use structopt::StructOpt as _;
+
+    if std::env::var("RUST_LOG").is_err() {
+        std::env::set_var("RUST_LOG", "info,tower_http::trace=debug");
+    }
     tracing_subscriber::fmt::init();
 
     match Opt::from_args() {
@@ -165,7 +169,9 @@ async fn api_server(opt: ApiServerOpt) -> anyhow::Result<()> {
         &shared_config,
     );
     let server = hako_server::api_server::DeploymentServer::new(service);
+    let layer = tower::ServiceBuilder::new().layer(tower_http::trace::TraceLayer::new_for_grpc());
     Ok(tonic::transport::Server::builder()
+        .layer(layer)
         .add_service(server)
         .serve(std::net::SocketAddr::from(([127, 0, 0, 1], 50051)))
         .await?)
