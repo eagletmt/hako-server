@@ -11,11 +11,13 @@ aws-config = "0.3"
 aws-sdk-s3 = "0.3"
 futures-util = "0.3"
 jrsonnet-evaluator = "0.4"
+listenfd = "0.3"
 prost = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 structopt = "0.3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "net"] }
+tokio-stream = { version = "0.1", default-features = false, features = ["net"] }
 tonic = "0.6"
 tower = "0.4"
 tower-http = { version = "0.2", features = ["trace"] }

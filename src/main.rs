@@ -170,9 +170,17 @@ async fn api_server(opt: ApiServerOpt) -> anyhow::Result<()> {
     );
     let server = hako_server::api_server::DeploymentServer::new(service);
     let layer = tower::ServiceBuilder::new().layer(tower_http::trace::TraceLayer::new_for_grpc());
-    Ok(tonic::transport::Server::builder()
+    let server = tonic::transport::Server::builder()
         .layer(layer)
-        .add_service(server)
-        .serve(std::net::SocketAddr::from(([127, 0, 0, 1], 50051)))
-        .await?)
+        .add_service(server);
+    if let Some(l) = listenfd::ListenFd::from_env().take_tcp_listener(0)? {
+        let listener = tokio::net::TcpListener::from_std(l)?;
+        let stream = tokio_stream::wrappers::TcpListenerStream::new(listener);
+        server.serve_with_incoming(stream).await?
+    } else {
+        server
+            .serve(std::net::SocketAddr::from(([127, 0, 0, 1], 50051)))
+            .await?
+    }
+    Ok(())
 }
