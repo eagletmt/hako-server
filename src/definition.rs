@@ -24,6 +24,7 @@ pub struct Scheduler {
     pub requires_compatibilities: Vec<String>,
     #[serde(default)]
     pub capacity_provider_strategy: Vec<CapacityProviderStrategy>,
+    pub network_configuration: Option<NetworkConfiguration>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -31,6 +32,18 @@ pub struct CapacityProviderStrategy {
     pub capacity_provider: String,
     pub weight: Option<i32>,
     pub base: Option<i32>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct NetworkConfiguration {
+    pub awsvpc_configuration: AwsvpcConfiguration,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct AwsvpcConfiguration {
+    pub subnets: Vec<String>,
+    pub security_groups: Vec<String>,
+    pub assign_public_ip: Option<bool>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

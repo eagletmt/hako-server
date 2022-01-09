@@ -39,6 +39,13 @@ impl pb::deployment_server::Deployment for DeploymentService {
         }
         wrap(self.deploy_oneshot_impl(request).await).await
     }
+
+    async fn run_task(
+        &self,
+        request: tonic::Request<pb::RunTaskRequest>,
+    ) -> Result<tonic::Response<pb::RunTaskResponse>, tonic::Status> {
+        wrap(self.run_task_impl(request).await).await
+    }
 }
 
 async fn wrap<T>(
@@ -55,10 +62,10 @@ async fn wrap<T>(
 }
 
 impl DeploymentService {
-    async fn deploy_oneshot_impl(
+    async fn load_definition(
         &self,
-        request: tonic::Request<pb::DeployOneshotRequest>,
-    ) -> anyhow::Result<Result<pb::DeployOneshotResponse, tonic::Status>> {
+        app_id: &str,
+    ) -> anyhow::Result<Option<(crate::definition::Definition, String)>> {
         let current_key = format!("{}/current", self.config.s3_prefix);
         let resp = self
             .s3_client
@@ -92,12 +99,7 @@ impl DeploymentService {
         })?;
         let revision = revision.trim_end();
 
-        let key = format!(
-            "{}/{}/{}.json",
-            self.config.s3_prefix,
-            revision,
-            request.get_ref().app_id
-        );
+        let key = format!("{}/{}/{}.json", self.config.s3_prefix, revision, app_id);
         let result = self
             .s3_client
             .get_object()
@@ -115,10 +117,7 @@ impl DeploymentService {
                 ..
             })
         ) {
-            return Ok(Err(tonic::Status::not_found(format!(
-                "{} is not registered",
-                request.get_ref().app_id
-            ))));
+            return Ok(None);
         }
         let resp = result.with_context(|| {
             format!(
@@ -145,6 +144,25 @@ impl DeploymentService {
                     self.config.s3_bucket, key
                 )
             })?;
+        Ok(Some((
+            definition,
+            format!("s3://{}/{}", self.config.s3_bucket, key),
+        )))
+    }
+
+    async fn deploy_oneshot_impl(
+        &self,
+        request: tonic::Request<pb::DeployOneshotRequest>,
+    ) -> anyhow::Result<Result<pb::DeployOneshotResponse, tonic::Status>> {
+        let (definition, location) = match self.load_definition(&request.get_ref().app_id).await? {
+            Some(t) => t,
+            None => {
+                return Ok(Err(tonic::Status::not_found(format!(
+                    "{} is not registered",
+                    request.get_ref().app_id
+                ))));
+            }
+        };
         tracing::info!(?definition);
 
         let builder = build_oneshot_task_definition(
@@ -153,17 +171,58 @@ impl DeploymentService {
             &definition,
         );
         tracing::info!(?builder);
-        let resp = builder.send().await.with_context(|| {
-            format!(
-                "failed to register task definition from s3://{}/{}",
-                self.config.s3_bucket, key
-            )
-        })?;
+        let resp = builder
+            .send()
+            .await
+            .with_context(|| format!("failed to register task definition from {}", location))?;
         let task_definition = resp.task_definition.unwrap();
         tracing::info!(?task_definition);
 
         Ok(Ok(pb::DeployOneshotResponse {
             task_definition_arn: task_definition.task_definition_arn.unwrap(),
+        }))
+    }
+
+    async fn run_task_impl(
+        &self,
+        request: tonic::Request<pb::RunTaskRequest>,
+    ) -> anyhow::Result<Result<pb::RunTaskResponse, tonic::Status>> {
+        let (definition, location) = match self.load_definition(&request.get_ref().app_id).await? {
+            Some(t) => t,
+            None => {
+                return Ok(Err(tonic::Status::not_found(format!(
+                    "{} is not registered",
+                    request.get_ref().app_id
+                ))));
+            }
+        };
+        tracing::info!(?definition);
+
+        let builder = build_run_task(
+            self.ecs_client.run_task(),
+            &request.get_ref().app_id,
+            &definition,
+            request
+                .get_ref()
+                .r#override
+                .as_ref()
+                .map(|o| &o.container_overrides),
+        );
+        tracing::info!(?builder);
+        let resp = builder
+            .send()
+            .await
+            .with_context(|| format!("failed to run task from {}", location))?;
+
+        Ok(Ok(pb::RunTaskResponse {
+            task_arn: resp
+                .tasks
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap()
+                .task_arn
+                .unwrap(),
         }))
     }
 }
@@ -257,6 +316,91 @@ fn build_container_definition(
         builder = builder.log_configuration(b.build());
     }
     // TODO: Support more attributes
+
+    builder
+}
+
+fn build_run_task<C, M, R>(
+    mut builder: aws_sdk_ecs::client::fluent_builders::RunTask<C, M, R>,
+    app_id: &str,
+    definition: &crate::definition::Definition,
+    overrides: Option<&std::collections::HashMap<String, pb::ContainerOverride>>,
+) -> aws_sdk_ecs::client::fluent_builders::RunTask<C, M, R>
+where
+    C: aws_smithy_client::bounds::SmithyConnector,
+    M: aws_smithy_client::bounds::SmithyMiddleware<C>,
+    R: aws_smithy_client::retry::NewRequestPolicy,
+{
+    builder = builder
+        .cluster(&definition.scheduler.cluster)
+        .propagate_tags(aws_sdk_ecs::model::PropagateTags::TaskDefinition)
+        .started_by("hako.Deployment/RunTask")
+        .task_definition(app_id);
+
+    for strategy in &definition.scheduler.capacity_provider_strategy {
+        let mut b = aws_sdk_ecs::model::CapacityProviderStrategyItem::builder()
+            .capacity_provider(&strategy.capacity_provider);
+        if let Some(weight) = strategy.weight {
+            b = b.weight(weight);
+        }
+        if let Some(base) = strategy.base {
+            b = b.base(base);
+        }
+        builder = builder.capacity_provider_strategy(b.build());
+    }
+
+    if let Some(ref network_configuration) = definition.scheduler.network_configuration {
+        let awsvpc_configuration = &network_configuration.awsvpc_configuration;
+        let mut b = aws_sdk_ecs::model::AwsVpcConfiguration::builder();
+        for subnet_id in &awsvpc_configuration.subnets {
+            b = b.subnets(subnet_id);
+        }
+        for group in &awsvpc_configuration.security_groups {
+            b = b.security_groups(group);
+        }
+        if let Some(x) = awsvpc_configuration.assign_public_ip {
+            b = b.assign_public_ip(if x {
+                aws_sdk_ecs::model::AssignPublicIp::Enabled
+            } else {
+                aws_sdk_ecs::model::AssignPublicIp::Disabled
+            });
+        }
+        builder = builder.network_configuration(
+            aws_sdk_ecs::model::NetworkConfiguration::builder()
+                .awsvpc_configuration(b.build())
+                .build(),
+        );
+    }
+
+    if let Some(overrides) = overrides {
+        let mut task_override = aws_sdk_ecs::model::TaskOverride::builder();
+        for (name, o) in overrides {
+            let mut b = aws_sdk_ecs::model::ContainerOverride::builder().name(name);
+            for arg in &o.command {
+                b = b.command(arg);
+            }
+            for (k, v) in &o.env {
+                b = b.environment(
+                    aws_sdk_ecs::model::KeyValuePair::builder()
+                        .name(k)
+                        .value(v)
+                        .build(),
+                );
+            }
+            if let Some(c) = o.cpu {
+                b = b.cpu(c);
+            }
+            if let Some(m) = o.memory {
+                b = b.memory(m);
+            }
+            if let Some(m) = o.memory_reservation {
+                b = b.memory(m);
+            }
+
+            task_override = task_override.container_overrides(b.build());
+        }
+        builder = builder.overrides(task_override.build());
+    }
 
     builder
 }

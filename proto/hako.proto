@@ -1,8 +1,11 @@
 syntax = "proto3";
 package hako;
 
+import "google/protobuf/wrappers.proto";
+
 service Deployment {
   rpc DeployOneshot(DeployOneshotRequest) returns (DeployOneshotResponse) {}
+  rpc RunTask(RunTaskRequest) returns (RunTaskResponse) {}
 }
 
 message DeployOneshotRequest {
@@ -11,4 +14,25 @@ message DeployOneshotRequest {
 
 message DeployOneshotResponse {
   string task_definition_arn = 1;
+}
+
+message RunTaskRequest {
+  string app_id = 1;
+  RunTaskOverride override = 2;
+}
+
+message RunTaskOverride {
+  map<string, ContainerOverride> container_overrides = 1;
+}
+
+message ContainerOverride {
+  repeated string command = 1;
+  map<string, string> env = 2;
+  google.protobuf.Int32Value cpu = 3;
+  google.protobuf.Int32Value memory = 4;
+  google.protobuf.Int32Value memory_reservation = 5;
+}
+
+message RunTaskResponse {
+  string task_arn = 1;
 }
