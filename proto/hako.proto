@@ -4,24 +4,24 @@ package hako;
 import "google/protobuf/wrappers.proto";
 
 service Deployment {
-  rpc DeployOneshot(DeployOneshotRequest) returns (DeployOneshotResponse) {}
-  rpc RunTask(RunTaskRequest) returns (RunTaskResponse) {}
+  rpc Register(RegisterRequest) returns (RegisterResponse) {}
+  rpc Run(RunRequest) returns (RunResponse) {}
 }
 
-message DeployOneshotRequest {
+message RegisterRequest {
   string app_id = 1;
 }
 
-message DeployOneshotResponse {
+message RegisterResponse {
   string task_definition_arn = 1;
 }
 
-message RunTaskRequest {
+message RunRequest {
   string app_id = 1;
-  RunTaskOverride override = 2;
+  RunOverride override = 2;
 }
 
-message RunTaskOverride {
+message RunOverride {
   map<string, ContainerOverride> container_overrides = 1;
 }
 
@@ -33,6 +33,6 @@ message ContainerOverride {
   google.protobuf.Int32Value memory_reservation = 5;
 }
 
-message RunTaskResponse {
+message RunResponse {
   string task_arn = 1;
 }

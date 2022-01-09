@@ -30,21 +30,21 @@ impl DeploymentService {
 
 #[tonic::async_trait]
 impl pb::deployment_server::Deployment for DeploymentService {
-    async fn deploy_oneshot(
+    async fn register(
         &self,
-        request: tonic::Request<pb::DeployOneshotRequest>,
-    ) -> Result<tonic::Response<pb::DeployOneshotResponse>, tonic::Status> {
+        request: tonic::Request<pb::RegisterRequest>,
+    ) -> Result<tonic::Response<pb::RegisterResponse>, tonic::Status> {
         if request.get_ref().app_id.is_empty() {
             return Err(tonic::Status::invalid_argument("app_id must be present"));
         }
-        wrap(self.deploy_oneshot_impl(request).await).await
+        wrap(self.register_impl(request).await).await
     }
 
-    async fn run_task(
+    async fn run(
         &self,
-        request: tonic::Request<pb::RunTaskRequest>,
-    ) -> Result<tonic::Response<pb::RunTaskResponse>, tonic::Status> {
-        wrap(self.run_task_impl(request).await).await
+        request: tonic::Request<pb::RunRequest>,
+    ) -> Result<tonic::Response<pb::RunResponse>, tonic::Status> {
+        wrap(self.run_impl(request).await).await
     }
 }
 
@@ -150,10 +150,10 @@ impl DeploymentService {
         )))
     }
 
-    async fn deploy_oneshot_impl(
+    async fn register_impl(
         &self,
-        request: tonic::Request<pb::DeployOneshotRequest>,
-    ) -> anyhow::Result<Result<pb::DeployOneshotResponse, tonic::Status>> {
+        request: tonic::Request<pb::RegisterRequest>,
+    ) -> anyhow::Result<Result<pb::RegisterResponse, tonic::Status>> {
         let (definition, location) = match self.load_definition(&request.get_ref().app_id).await? {
             Some(t) => t,
             None => {
@@ -165,7 +165,7 @@ impl DeploymentService {
         };
         tracing::info!(?definition);
 
-        let builder = build_oneshot_task_definition(
+        let builder = build_task_definition(
             self.ecs_client.register_task_definition(),
             &request.get_ref().app_id,
             &definition,
@@ -178,15 +178,15 @@ impl DeploymentService {
         let task_definition = resp.task_definition.unwrap();
         tracing::info!(?task_definition);
 
-        Ok(Ok(pb::DeployOneshotResponse {
+        Ok(Ok(pb::RegisterResponse {
             task_definition_arn: task_definition.task_definition_arn.unwrap(),
         }))
     }
 
-    async fn run_task_impl(
+    async fn run_impl(
         &self,
-        request: tonic::Request<pb::RunTaskRequest>,
-    ) -> anyhow::Result<Result<pb::RunTaskResponse, tonic::Status>> {
+        request: tonic::Request<pb::RunRequest>,
+    ) -> anyhow::Result<Result<pb::RunResponse, tonic::Status>> {
         let (definition, location) = match self.load_definition(&request.get_ref().app_id).await? {
             Some(t) => t,
             None => {
@@ -214,7 +214,7 @@ impl DeploymentService {
             .await
             .with_context(|| format!("failed to run task from {}", location))?;
 
-        Ok(Ok(pb::RunTaskResponse {
+        Ok(Ok(pb::RunResponse {
             task_arn: resp
                 .tasks
                 .unwrap()
@@ -227,7 +227,7 @@ impl DeploymentService {
     }
 }
 
-fn build_oneshot_task_definition<C, M, R>(
+fn build_task_definition<C, M, R>(
     mut builder: aws_sdk_ecs::client::fluent_builders::RegisterTaskDefinition<C, M, R>,
     app_id: &str,
     definition: &crate::definition::Definition,
@@ -334,7 +334,7 @@ where
     builder = builder
         .cluster(&definition.scheduler.cluster)
         .propagate_tags(aws_sdk_ecs::model::PropagateTags::TaskDefinition)
-        .started_by("hako.Deployment/RunTask")
+        .started_by("hako.Deployment/Run")
         .task_definition(app_id);
 
     for strategy in &definition.scheduler.capacity_provider_strategy {
