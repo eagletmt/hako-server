@@ -7,8 +7,10 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1"
-aws-config = "0.3"
-aws-sdk-s3 = "0.3"
+aws-config = "0.4"
+aws-sdk-ecs = "0.4"
+aws-sdk-s3 = "0.4"
+aws-smithy-client = "0.34.0"
 futures-util = "0.3"
 jrsonnet-evaluator = "0.4"
 listenfd = "0.3"

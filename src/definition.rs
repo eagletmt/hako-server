@@ -1,8 +1,36 @@
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Definition {
+    pub scheduler: Scheduler,
     pub app: App,
     #[serde(default)]
     pub sidecars: std::collections::HashMap<String, Sidecar>,
+}
+
+fn default_cluster() -> String {
+    "default".to_owned()
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct Scheduler {
+    #[serde(default = "default_cluster")]
+    pub cluster: String,
+    pub region: String,
+    pub task_role_arn: Option<String>,
+    pub execution_role_arn: Option<String>,
+    pub network_mode: Option<String>,
+    pub cpu: Option<String>,
+    pub memory: Option<String>,
+    #[serde(default)]
+    pub requires_compatibilities: Vec<String>,
+    #[serde(default)]
+    pub capacity_provider_strategy: Vec<CapacityProviderStrategy>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct CapacityProviderStrategy {
+    pub capacity_provider: String,
+    pub weight: Option<i32>,
+    pub base: Option<i32>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
