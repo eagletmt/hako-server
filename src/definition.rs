@@ -98,7 +98,7 @@ pub struct ContainerAttributes {
     pub links: Vec<String>,
     #[serde(default = "default_as_true")]
     pub essential: bool,
-    pub entry_point: Option<String>,
+    pub entry_point: Option<Vec<String>>,
     pub command: Option<Vec<String>>,
     pub user: Option<String>,
     #[serde(default)]

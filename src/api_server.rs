@@ -20,6 +20,7 @@ pub struct DeploymentServiceConfig {
 
 impl DeploymentService {
     pub fn new(config: DeploymentServiceConfig, shared_config: &aws_config::Config) -> Self {
+        // TODO: Set region from Hako definition
         Self {
             config,
             s3_client: aws_sdk_s3::Client::new(shared_config),
@@ -300,6 +301,193 @@ fn build_container_definition(
 ) -> aws_sdk_ecs::model::container_definition::Builder {
     use std::str::FromStr as _;
 
+    builder = builder
+        .cpu(container.cpu)
+        .set_memory(container.memory)
+        .set_memory_reservation(container.memory_reservation)
+        .essential(container.essential)
+        .privileged(container.privileged)
+        .readonly_root_filesystem(container.readonly_root_filesystem);
+
+    if let Some(ref creds) = container.repository_credentials {
+        builder = builder.repository_credentials(
+            aws_sdk_ecs::model::RepositoryCredentials::builder()
+                .credentials_parameter(&creds.credentials_parameter)
+                .build(),
+        );
+    }
+
+    for link in &container.links {
+        builder = builder.links(link);
+    }
+
+    for port_mapping in &container.port_mappings {
+        let mut b = aws_sdk_ecs::model::PortMapping::builder()
+            .container_port(port_mapping.container_port)
+            .host_port(port_mapping.host_port);
+        match aws_sdk_ecs::model::TransportProtocol::from_str(&port_mapping.protocol) {
+            Ok(p) => {
+                b = b.protocol(p);
+            }
+            Err(e) => {
+                tracing::warn!(%port_mapping.protocol, ?e, "invalid .port_mappings[].protocol value");
+            }
+        }
+        builder = builder.port_mappings(b.build());
+    }
+
+    if let Some(ref entry_point) = container.entry_point {
+        for arg in entry_point {
+            builder = builder.entry_point(arg);
+        }
+    }
+
+    if let Some(ref command) = container.command {
+        for arg in command {
+            builder = builder.command(arg);
+        }
+    }
+
+    for (k, v) in &container.env {
+        builder = builder.environment(
+            aws_sdk_ecs::model::KeyValuePair::builder()
+                .name(k)
+                .value(v)
+                .build(),
+        );
+    }
+
+    for mount_point in &container.mount_points {
+        builder = builder.mount_points(
+            aws_sdk_ecs::model::MountPoint::builder()
+                .source_volume(&mount_point.source_volume)
+                .container_path(&mount_point.container_path)
+                .read_only(mount_point.read_only)
+                .build(),
+        );
+    }
+
+    for volume_from in &container.volumes_from {
+        builder = builder.volumes_from(
+            aws_sdk_ecs::model::VolumeFrom::builder()
+                .source_container(&volume_from.source_container)
+                .read_only(volume_from.read_only)
+                .build(),
+        );
+    }
+
+    if let Some(ref linux_parameters) = container.linux_parameters {
+        let mut b = aws_sdk_ecs::model::LinuxParameters::builder()
+            .set_init_process_enabled(linux_parameters.init_process_enabled)
+            .set_shared_memory_size(linux_parameters.shared_memory_size);
+
+        if let Some(ref capabilities) = linux_parameters.capabilities {
+            for c in capabilities {
+                let mut bb = aws_sdk_ecs::model::KernelCapabilities::builder();
+                for x in &c.add {
+                    bb = bb.add(x);
+                }
+                for x in &c.drop {
+                    bb = bb.drop(x);
+                }
+                b = b.capabilities(bb.build());
+            }
+        }
+
+        if let Some(ref devices) = linux_parameters.devices {
+            for d in devices {
+                let mut bb = aws_sdk_ecs::model::Device::builder().host_path(&d.host_path);
+                if let Some(ref container_path) = d.container_path {
+                    bb = bb.container_path(container_path);
+                }
+                for p in &d.permissions {
+                    match aws_sdk_ecs::model::DeviceCgroupPermission::from_str(p) {
+                        Ok(p) => {
+                            bb = bb.permissions(p);
+                        }
+                        Err(e) => {
+                            tracing::warn!(%p, ?e, "invalid .linux_parameters[].devices[].permission value");
+                        }
+                    }
+                }
+                b = b.devices(bb.build());
+            }
+        }
+
+        if let Some(ref tmpfs) = linux_parameters.tmpfs {
+            for t in tmpfs {
+                let mut bb = aws_sdk_ecs::model::Tmpfs::builder()
+                    .container_path(&t.container_path)
+                    .size(t.size);
+                for mount_option in &t.mount_options {
+                    bb = bb.mount_options(mount_option);
+                }
+                b = b.tmpfs(bb.build());
+            }
+        }
+
+        builder = builder.linux_parameters(b.build());
+    }
+
+    for secret in &container.secrets {
+        builder = builder.secrets(
+            aws_sdk_ecs::model::Secret::builder()
+                .name(&secret.name)
+                .value_from(&secret.value_from)
+                .build(),
+        );
+    }
+
+    for dep in &container.depends_on {
+        let mut b =
+            aws_sdk_ecs::model::ContainerDependency::builder().container_name(&dep.container_name);
+        match aws_sdk_ecs::model::ContainerCondition::from_str(&dep.condition) {
+            Ok(c) => {
+                b = b.condition(c);
+            }
+            Err(e) => {
+                tracing::warn!(%dep.condition, ?e, "invalid .depends_on[].condition value");
+            }
+        }
+        builder = builder.depends_on(b.build());
+    }
+
+    if let Some(ref user) = container.user {
+        builder = builder.user(user);
+    }
+
+    for extra_host in &container.extra_hosts {
+        builder = builder.extra_hosts(
+            aws_sdk_ecs::model::HostEntry::builder()
+                .hostname(&extra_host.hostname)
+                .ip_address(&extra_host.ip_address)
+                .build(),
+        );
+    }
+
+    for opt in &container.docker_security_options {
+        builder = builder.docker_security_options(opt);
+    }
+
+    for (k, v) in &container.docker_labels {
+        builder = builder.docker_labels(k, v);
+    }
+
+    for ulimit in &container.ulimits {
+        let mut b = aws_sdk_ecs::model::Ulimit::builder()
+            .soft_limit(ulimit.soft_limit)
+            .hard_limit(ulimit.hard_limit);
+        match aws_sdk_ecs::model::UlimitName::from_str(&ulimit.name) {
+            Ok(n) => {
+                b = b.name(n);
+            }
+            Err(e) => {
+                tracing::warn!(%ulimit.name, ?e, "invalid .ulimits[].name value");
+            }
+        }
+        builder = builder.ulimits(b.build());
+    }
+
     if let Some(ref log_configuration) = container.log_configuration {
         let mut b = aws_sdk_ecs::model::LogConfiguration::builder();
         match aws_sdk_ecs::model::LogDriver::from_str(&log_configuration.log_driver) {
@@ -315,7 +503,27 @@ fn build_container_definition(
         }
         builder = builder.log_configuration(b.build());
     }
-    // TODO: Support more attributes
+
+    if let Some(ref health_check) = container.health_check {
+        let mut b = aws_sdk_ecs::model::HealthCheck::builder()
+            .interval(health_check.interval)
+            .retries(health_check.retries)
+            .timeout(health_check.timeout)
+            .set_start_period(health_check.start_period);
+        for arg in &health_check.command {
+            b = b.command(arg);
+        }
+        builder = builder.health_check(b.build());
+    }
+
+    for sc in &container.system_controls {
+        builder = builder.system_controls(
+            aws_sdk_ecs::model::SystemControl::builder()
+                .namespace(&sc.namespace)
+                .value(&sc.value)
+                .build(),
+        );
+    }
 
     builder
 }
