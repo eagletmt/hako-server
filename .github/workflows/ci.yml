@@ -48,13 +48,5 @@ jobs:
       REPO: ghcr.io/${{ github.repository_owner }}/hako-server
     steps:
       - uses: actions/checkout@v2
-      - name: Login to registry
-        run: echo "${{ secrets.CR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
       - name: Run docker build
-        run: docker build --build-arg BUILDKIT_INLINE_CACHE=1 --cache-from ${REPO}:builder -t ${REPO}:latest .
-      - name: Cache build stage
-        run: |
-          docker build --build-arg BUILDKIT_INLINE_CACHE=1 -t ${REPO}:builder --target builder .
-          docker push ${REPO}:builder
-      - name: Push Docker image
-        run: docker push ${REPO}:latest
+        run: docker build --build-arg BUILDKIT_INLINE_CACHE=1 -t ${REPO}:latest .
