@@ -1,6 +1,7 @@
 FROM public.ecr.aws/docker/library/rust:1.57-slim-bullseye as builder
 WORKDIR /workspace
 RUN rustup component add rustfmt
+RUN apt update && apt install -y protobuf-compiler
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src && echo 'fn main() {}' > src/main.rs && echo 'fn main() {}' > build.rs && cargo build --locked --release && rm -r src/main.rs target/release/deps/hako_server-* build.rs target/release/build/hako-server-*
 COPY build.rs ./
