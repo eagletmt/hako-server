@@ -2,49 +2,49 @@ use anyhow::Context as _;
 use futures_util::StreamExt as _;
 use futures_util::TryStreamExt as _;
 
-#[derive(structopt::StructOpt)]
+#[derive(clap::Parser)]
 enum Opt {
-    #[structopt(about = "Upload Hako definitions to S3")]
+    #[clap(about = "Upload Hako definitions to S3")]
     UploadDefinitions(UploadDefinitionsOpt),
-    #[structopt(about = "Start gRPC server")]
+    #[clap(about = "Start gRPC server")]
     ApiServer(ApiServerOpt),
 }
 
-#[derive(structopt::StructOpt)]
+#[derive(clap::Parser)]
 struct UploadDefinitionsOpt {
-    #[structopt(short, long, help = "Revision of the Hako definitions to upload")]
+    #[clap(short, long, help = "Revision of the Hako definitions to upload")]
     revision: String,
-    #[structopt(
+    #[clap(
         short,
         long,
         default_value = ".",
         help = "Directory of Hako definitions to upload"
     )]
     directory: std::path::PathBuf,
-    #[structopt(long, env, help = "Target S3 bucket")]
+    #[clap(long, env, help = "Target S3 bucket")]
     s3_bucket: String,
-    #[structopt(long, env, help = "Target S3 prefix")]
+    #[clap(long, env, help = "Target S3 prefix")]
     s3_prefix: String,
 }
 
-#[derive(structopt::StructOpt)]
+#[derive(clap::Parser)]
 struct ApiServerOpt {
-    #[structopt(long, env, help = "S3 bucket")]
+    #[clap(long, env, help = "S3 bucket")]
     s3_bucket: String,
-    #[structopt(long, env, help = "S3 prefix")]
+    #[clap(long, env, help = "S3 prefix")]
     s3_prefix: String,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    use structopt::StructOpt as _;
+    use clap::Parser as _;
 
     if std::env::var("RUST_LOG").is_err() {
         std::env::set_var("RUST_LOG", "info,tower_http::trace=debug");
     }
     tracing_subscriber::fmt::init();
 
-    match Opt::from_args() {
+    match Opt::parse() {
         Opt::UploadDefinitions(opt) => upload_definitions(opt).await,
         Opt::ApiServer(opt) => api_server(opt).await,
     }
@@ -139,7 +139,7 @@ async fn upload_file(
         key
     );
 
-    let body = aws_sdk_s3::ByteStream::from(json_str.as_bytes().to_owned());
+    let body = aws_sdk_s3::types::ByteStream::from(json_str.as_bytes().to_owned());
     s3_client
         .put_object()
         .bucket(&opt.s3_bucket)

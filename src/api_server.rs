@@ -19,7 +19,7 @@ pub struct DeploymentServiceConfig {
 }
 
 impl DeploymentService {
-    pub fn new(config: DeploymentServiceConfig, shared_config: &aws_config::Config) -> Self {
+    pub fn new(config: DeploymentServiceConfig, shared_config: &aws_types::SdkConfig) -> Self {
         // TODO: Set region from Hako definition
         Self {
             config,
@@ -110,7 +110,7 @@ impl DeploymentService {
             .await;
         if matches!(
             result,
-            Err(aws_sdk_s3::SdkError::ServiceError {
+            Err(aws_sdk_s3::types::SdkError::ServiceError {
                 err: aws_sdk_s3::error::GetObjectError {
                     kind: aws_sdk_s3::error::GetObjectErrorKind::NoSuchKey(_),
                     ..
@@ -228,16 +228,11 @@ impl DeploymentService {
     }
 }
 
-fn build_task_definition<C, M, R>(
-    mut builder: aws_sdk_ecs::client::fluent_builders::RegisterTaskDefinition<C, M, R>,
+fn build_task_definition(
+    mut builder: aws_sdk_ecs::client::fluent_builders::RegisterTaskDefinition,
     app_id: &str,
     definition: &crate::definition::Definition,
-) -> aws_sdk_ecs::client::fluent_builders::RegisterTaskDefinition<C, M, R>
-where
-    C: aws_smithy_client::bounds::SmithyConnector,
-    M: aws_smithy_client::bounds::SmithyMiddleware<C>,
-    R: aws_smithy_client::retry::NewRequestPolicy,
-{
+) -> aws_sdk_ecs::client::fluent_builders::RegisterTaskDefinition {
     use std::str::FromStr as _;
 
     builder = builder.family(app_id);
@@ -528,17 +523,12 @@ fn build_container_definition(
     builder
 }
 
-fn build_run_task<C, M, R>(
-    mut builder: aws_sdk_ecs::client::fluent_builders::RunTask<C, M, R>,
+fn build_run_task(
+    mut builder: aws_sdk_ecs::client::fluent_builders::RunTask,
     app_id: &str,
     definition: &crate::definition::Definition,
     overrides: Option<&std::collections::HashMap<String, pb::ContainerOverride>>,
-) -> aws_sdk_ecs::client::fluent_builders::RunTask<C, M, R>
-where
-    C: aws_smithy_client::bounds::SmithyConnector,
-    M: aws_smithy_client::bounds::SmithyMiddleware<C>,
-    R: aws_smithy_client::retry::NewRequestPolicy,
-{
+) -> aws_sdk_ecs::client::fluent_builders::RunTask {
     builder = builder
         .cluster(&definition.scheduler.cluster)
         .propagate_tags(aws_sdk_ecs::model::PropagateTags::TaskDefinition)
